@@ -4,8 +4,8 @@
             "root": "frontend",
             "framework": "vite"
         },
-        "backend": {
-            "root": "backend",
+        "api": {
+            "root": "api",
             "entrypoint": "main.py"
         }
     },
@@ -14,7 +14,7 @@
             "source": "/api(/.*)?",
             "destination": {
                 "type": "service",
-                "service": "backend"
+                "service": "api"
             }
         },
         {
