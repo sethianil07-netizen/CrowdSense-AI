@@ -1,0 +1,114 @@
+{
+  "venues": [
+    {
+      "id": "mumbai-central",
+      "name": "Mumbai Central Arena",
+      "width": 150,
+      "height": 80,
+      "entry_points": [
+        { "id": "gate-a", "x": 5, "y": 20, "label": "Gate A" },
+        { "id": "gate-b", "x": 5, "y": 60, "label": "Gate B" },
+        { "id": "gate-c", "x": 145, "y": 20, "label": "Gate C" },
+        { "id": "gate-d", "x": 145, "y": 60, "label": "Gate D" }
+      ],
+      "exit_points": [
+        { "id": "exit-1", "x": 75, "y": 2, "label": "North Exit" },
+        { "id": "exit-2", "x": 20, "y": 78, "label": "South-West Exit" },
+        { "id": "exit-3", "x": 130, "y": 78, "label": "South-East Exit" }
+      ],
+      "obstacles": [
+        { "x": 65, "y": 30, "width": 20, "height": 20, "label": "Central Stage" },
+        { "x": 30, "y": 5, "width": 10, "height": 8, "label": "Ticket Booth" },
+        { "x": 110, "y": 5, "width": 10, "height": 8, "label": "Security Barrier" },
+        { "x": 10, "y": 40, "width": 6, "height": 15, "label": "Merchandise Stall" },
+        { "x": 134, "y": 40, "width": 6, "height": 15, "label": "First Aid Post" }
+      ],
+      "concessions": [
+        { "id": "food-1", "x": 30, "y": 60, "label": "Snack Counter 1" },
+        { "id": "food-2", "x": 50, "y": 65, "label": "Snack Counter 2" },
+        { "id": "food-3", "x": 95, "y": 65, "label": "Snack Counter 3" },
+        { "id": "food-4", "x": 115, "y": 60, "label": "Beverage Counter" },
+        { "id": "food-5", "x": 75, "y": 70, "label": "Ice Cream Stall" }
+      ]
+    },
+    {
+      "id": "festival-ground",
+      "name": "Festival Ground",
+      "width": 200,
+      "height": 200,
+      "entry_points": [
+        { "id": "gate-a", "x": 100, "y": 5, "label": "Main Gate" },
+        { "id": "gate-b", "x": 5, "y": 100, "label": "West Gate" }
+      ],
+      "exit_points": [
+        { "id": "exit-1", "x": 195, "y": 100, "label": "East Exit" },
+        { "id": "exit-2", "x": 100, "y": 195, "label": "South Exit" },
+        { "id": "exit-3", "x": 5, "y": 20, "label": "Emergency Exit NW" },
+        { "id": "exit-4", "x": 195, "y": 180, "label": "Emergency Exit SE" }
+      ],
+      "obstacles": [
+        { "x": 80, "y": 80, "width": 40, "height": 40, "label": "Main Stage" },
+        { "x": 30, "y": 30, "width": 25, "height": 25, "label": "Second Stage" },
+        { "x": 150, "y": 30, "width": 20, "height": 20, "label": "Art Installation" },
+        { "x": 30, "y": 150, "width": 20, "height": 20, "label": "VIP Lounge" },
+        { "x": 150, "y": 150, "width": 25, "height": 25, "label": "Camping Zone Fence" },
+        { "x": 90, "y": 20, "width": 20, "height": 6, "label": "Entrance Barrier" }
+      ],
+      "concessions": [
+        { "id": "food-1", "x": 60, "y": 60, "label": "Food Truck 1" },
+        { "id": "food-2", "x": 140, "y": 60, "label": "Food Truck 2" },
+        { "id": "food-3", "x": 60, "y": 140, "label": "Food Truck 3" },
+        { "id": "food-4", "x": 140, "y": 140, "label": "Food Truck 4" },
+        { "id": "food-5", "x": 100, "y": 60, "label": "Beer Garden" },
+        { "id": "food-6", "x": 100, "y": 140, "label": "Coffee Cart" },
+        { "id": "food-7", "x": 40, "y": 100, "label": "Snack Stand West" },
+        { "id": "food-8", "x": 160, "y": 100, "label": "Snack Stand East" }
+      ]
+    },
+    {
+      "id": "stadium",
+      "name": "National Stadium",
+      "width": 180,
+      "height": 150,
+      "entry_points": [
+        { "id": "gate-a", "x": 10, "y": 20, "label": "Gate A" },
+        { "id": "gate-b", "x": 10, "y": 130, "label": "Gate B" },
+        { "id": "gate-c", "x": 90, "y": 5, "label": "Gate C" },
+        { "id": "gate-d", "x": 170, "y": 20, "label": "Gate D" },
+        { "id": "gate-e", "x": 170, "y": 130, "label": "Gate E" },
+        { "id": "gate-f", "x": 90, "y": 145, "label": "Gate F" }
+      ],
+      "exit_points": [
+        { "id": "exit-1", "x": 90, "y": 2, "label": "North Concourse Exit" },
+        { "id": "exit-2", "x": 178, "y": 75, "label": "East Concourse Exit" },
+        { "id": "exit-3", "x": 90, "y": 148, "label": "South Concourse Exit" },
+        { "id": "exit-4", "x": 2, "y": 75, "label": "West Concourse Exit" },
+        { "id": "exit-5", "x": 30, "y": 5, "label": "NW Emergency Exit" },
+        { "id": "exit-6", "x": 150, "y": 5, "label": "NE Emergency Exit" },
+        { "id": "exit-7", "x": 30, "y": 145, "label": "SW Emergency Exit" },
+        { "id": "exit-8", "x": 150, "y": 145, "label": "SE Emergency Exit" }
+      ],
+      "obstacles": [
+        { "x": 55, "y": 40, "width": 70, "height": 70, "label": "Playing Field" },
+        { "x": 40, "y": 25, "width": 12, "height": 10, "label": "Turnstile Block A" },
+        { "x": 128, "y": 25, "width": 12, "height": 10, "label": "Turnstile Block D" },
+        { "x": 40, "y": 115, "width": 12, "height": 10, "label": "Turnstile Block B" },
+        { "x": 128, "y": 115, "width": 12, "height": 10, "label": "Turnstile Block E" },
+        { "x": 84, "y": 15, "width": 12, "height": 8, "label": "Turnstile Block C" },
+        { "x": 84, "y": 127, "width": 12, "height": 8, "label": "Turnstile Block F" }
+      ],
+      "concessions": [
+        { "id": "food-1", "x": 25, "y": 45, "label": "Concourse Kiosk 1" },
+        { "id": "food-2", "x": 25, "y": 90, "label": "Concourse Kiosk 2" },
+        { "id": "food-3", "x": 155, "y": 45, "label": "Concourse Kiosk 3" },
+        { "id": "food-4", "x": 155, "y": 90, "label": "Concourse Kiosk 4" },
+        { "id": "food-5", "x": 60, "y": 15, "label": "North Snack Bar" },
+        { "id": "food-6", "x": 120, "y": 15, "label": "North Beverage Bar" },
+        { "id": "food-7", "x": 60, "y": 135, "label": "South Snack Bar" },
+        { "id": "food-8", "x": 120, "y": 135, "label": "South Beverage Bar" },
+        { "id": "food-9", "x": 15, "y": 75, "label": "West Merch Stand" },
+        { "id": "food-10", "x": 165, "y": 75, "label": "East Merch Stand" }
+      ]
+    }
+  ]
+}

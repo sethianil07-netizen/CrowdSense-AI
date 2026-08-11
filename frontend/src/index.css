@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: #0B1220;
+  background-image:
+    radial-gradient(circle at 15% 0%, rgba(79, 209, 255, 0.06), transparent 40%),
+    radial-gradient(circle at 85% 100%, rgba(255, 85, 104, 0.05), transparent 45%);
+  color: #EAF0F7;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint schematic grid, evokes an ops-room floor plan / radar grid */
+.grid-floor {
+  background-image:
+    linear-gradient(rgba(79, 209, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 209, 255, 0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.scanline-layer {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow: hidden;
+}
+
+.scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: linear-gradient(to bottom, transparent, rgba(79, 209, 255, 0.035), transparent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #22314A;
+  border-radius: 4px;
+}
+
+:focus-visible {
+  outline: 2px solid #4FD1FF;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
