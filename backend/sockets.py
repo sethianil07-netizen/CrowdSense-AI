@@ -28,7 +28,7 @@ logger = logging.getLogger("crowdsense.sockets")
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*",
-    socketio_path="api/socket.io",
+    socketio_path="socket.io",
 )
 
 # One SimulationManager per connected session.
