@@ -8,7 +8,21 @@ import {
   generateMockAgents,
 } from "../data/mockData";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+// In local dev, talk to the FastAPI dev server directly. In production
+// (the Vercel deployment), fall back to same-origin — vercel.json routes
+// /api/* to the backend service on the same domain, so a relative path
+// (rather than a hardcoded localhost URL) is what actually works for
+// anyone visiting the deployed site, not just on the developer's own
+// machine.
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
+
+// Socket.io path is namespaced under /api to match vercel.json, which
+// only rewrites /api/* traffic to the backend service — the default
+// /socket.io/ path would miss that rewrite entirely in production. Must
+// match the server's socketio_path in backend/sockets.py exactly.
+const SOCKET_PATH = "/api/socket.io";
+
 const MAX_HISTORY_POINTS = 40;
 
 /**
@@ -80,7 +94,13 @@ export function useCrowdSim() {
   useEffect(() => {
     if (!backendAvailable) return;
 
-    const socket = io(BACKEND_URL, { transports: ["websocket", "polling"] });
+    // Passing `undefined` (rather than an empty string) tells socket.io
+    // to connect to the page's own origin — what we want in production,
+    // where BACKEND_URL is intentionally "".
+    const socket = io(BACKEND_URL || undefined, {
+      transports: ["websocket", "polling"],
+      path: SOCKET_PATH,
+    });
     socketRef.current = socket;
 
     socket.on("connect", () => setConnected(true));

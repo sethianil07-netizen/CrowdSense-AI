@@ -22,9 +22,18 @@ logger = logging.getLogger("crowdsense.sockets")
 
 # Async Socket.IO server. CORS is also handled at the ASGI/FastAPI layer,
 # but socketio needs its own allowed origins list too.
+#
+# socketio_path is set to "api/socket.io" (rather than the default
+# "socket.io") so the Socket.io handshake rides under the same /api
+# prefix as our REST routes. This matters specifically for the Vercel
+# Services deployment: vercel.json only rewrites /api/* traffic to the
+# backend service, so a Socket.io connection at the default /socket.io/
+# path would silently miss that rewrite and never reach the backend at
+# all — it would fall through to the frontend's catch-all route instead.
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=["http://localhost:5173"],
+    socketio_path="api/socket.io",
 )
 
 # One SimulationManager per connected session (sid). For a hackathon demo
