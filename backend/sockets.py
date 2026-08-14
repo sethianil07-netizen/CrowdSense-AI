@@ -1,10 +1,7 @@
 """
 sockets.py
 
-Socket.io event handlers for the Crowd Flow Optimizer. Handles client
-connections, simulation start/config updates over the socket channel, and
-runs the background broadcast loop that pushes simulation_update every
-100ms plus bottleneck_alert / reroute_suggestion events when relevant.
+Socket.io event handlers for the Crowd Flow Optimizer.
 """
 
 from __future__ import annotations
@@ -18,84 +15,126 @@ import socketio
 from simulator import SimulationManager
 from venue import Venue
 
-logger = logging.getLogger("crowdsense.sockets")
+logger = logging.getLogger(
+    "crowdsense.sockets"
+)
 
-# Async Socket.IO server.
-#
-# The production frontend is served from Vercel, while the Socket.IO
-# handshake is routed through /api/socket.io. CORS is therefore open here
-# so the deployed frontend can establish the connection.
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*",
-    socketio_path="socket.io",
+    socketio_path="api/socket.io",
 )
 
-# One SimulationManager per connected session.
-_managers: Dict[str, SimulationManager] = {}
-_broadcast_tasks: Dict[str, asyncio.Task] = {}
+_managers: Dict[
+    str,
+    SimulationManager
+] = {}
 
-BROADCAST_INTERVAL = 0.1  # 100ms
+_broadcast_tasks: Dict[
+    str,
+    asyncio.Task
+] = {}
+
+BROADCAST_INTERVAL = 0.1
 
 
-def _get_manager(sid: str) -> SimulationManager:
+def _get_manager(
+    sid: str,
+) -> SimulationManager:
     if sid not in _managers:
-        _managers[sid] = SimulationManager()
+        _managers[sid] = (
+            SimulationManager()
+        )
+
     return _managers[sid]
 
 
 @sio.event
-async def connect(sid, environ):
-    logger.info("client connected: %s", sid)
-    _managers[sid] = SimulationManager()
+async def connect(
+    sid,
+    environ,
+):
+    logger.info(
+        "client connected: %s",
+        sid,
+    )
+
+    _managers[sid] = (
+        SimulationManager()
+    )
 
     await sio.emit(
         "connected",
         {
             "sid": sid,
-            "message": "connected to CrowdSense AI",
+            "message": (
+                "connected to CrowdSense AI"
+            ),
         },
         to=sid,
     )
 
 
 @sio.event
-async def disconnect(sid):
-    logger.info("client disconnected: %s", sid)
+async def disconnect(
+    sid,
+):
+    logger.info(
+        "client disconnected: %s",
+        sid,
+    )
 
-    task = _broadcast_tasks.pop(sid, None)
+    task = _broadcast_tasks.pop(
+        sid,
+        None,
+    )
+
     if task:
         task.cancel()
 
-    _managers.pop(sid, None)
+    _managers.pop(
+        sid,
+        None,
+    )
 
 
 @sio.event
-async def start_simulation(sid, data):
-    """
-    data:
-    {
-        "venue": <venue dict>,
-        "num_agents": int
-    }
-    """
+async def start_simulation(
+    sid,
+    data,
+):
     try:
-        manager = _get_manager(sid)
+        manager = _get_manager(
+            sid
+        )
 
-        venue_data = data.get("venue")
-        num_agents = int(data.get("num_agents", 500))
+        venue_data = (
+            data.get("venue")
+        )
+
+        num_agents = int(
+            data.get(
+                "num_agents",
+                500,
+            )
+        )
 
         if not venue_data:
             await sio.emit(
                 "error",
                 {
-                    "message": "Missing 'venue' in start_simulation payload"
+                    "message": (
+                        "Missing 'venue' in "
+                        "start_simulation payload"
+                    )
                 },
                 to=sid,
             )
             return
 
-        venue = Venue.load_from_json(venue_data)
+        venue = Venue.load_from_json(
+            venue_data
+        )
 
         manager.init_simulation(
             venue,
@@ -104,12 +143,17 @@ async def start_simulation(sid, data):
 
         await manager.start()
 
-        existing = _broadcast_tasks.get(sid)
+        existing = _broadcast_tasks.get(
+            sid
+        )
+
         if existing:
             existing.cancel()
 
-        _broadcast_tasks[sid] = asyncio.create_task(
-            _broadcast_loop(sid)
+        _broadcast_tasks[sid] = (
+            asyncio.create_task(
+                _broadcast_loop(sid)
+            )
         )
 
         await sio.emit(
@@ -122,25 +166,39 @@ async def start_simulation(sid, data):
         )
 
     except Exception as exc:
-        logger.exception("start_simulation failed")
+        logger.exception(
+            "start_simulation failed"
+        )
 
         await sio.emit(
             "error",
             {
-                "message": f"start_simulation failed: {exc}"
+                "message": (
+                    f"start_simulation failed: "
+                    f"{exc}"
+                )
             },
             to=sid,
         )
 
 
 @sio.event
-async def stop_simulation(sid, data=None):
-    manager = _managers.get(sid)
+async def stop_simulation(
+    sid,
+    data=None,
+):
+    manager = _managers.get(
+        sid
+    )
 
     if manager:
         await manager.stop()
 
-    task = _broadcast_tasks.pop(sid, None)
+    task = _broadcast_tasks.pop(
+        sid,
+        None,
+    )
+
     if task:
         task.cancel()
 
@@ -151,24 +209,212 @@ async def stop_simulation(sid, data=None):
     )
 
 
+# ----------------------------------------------------------------------
+# Multiple crowd surge event
+# ----------------------------------------------------------------------
+
 @sio.event
-async def update_config(sid, data):
+async def crowd_surge(
+    sid,
+    data,
+):
     """
-    Allows the client to tweak live simulation parameters, e.g.
+    Expected payload:
 
     {
-        "num_agents": 800
+        "locations": [
+            {"id": "gate-a", "x": 10, "y": 20},
+            {"id": "gate-c", "x": 90, "y": 5}
+        ],
+        "fraction": 0.70,
+        "radius": 1.4
     }
 
-    without a full stop/start round trip.
+    Backward compatibility:
+    If locations is omitted, x/y are accepted as a single target.
     """
-    manager = _managers.get(sid)
 
-    if not manager or not manager.venue:
+    manager = _managers.get(
+        sid
+    )
+
+    if (
+        not manager
+        or not manager.running
+    ):
         await sio.emit(
             "error",
             {
-                "message": "No active simulation to configure"
+                "message": (
+                    "Start the simulation "
+                    "before triggering a crowd surge"
+                )
+            },
+            to=sid,
+        )
+        return
+
+    try:
+        raw_locations = (
+            data.get("locations")
+        )
+
+        # ------------------------------------------------------------
+        # Preferred multi-location format.
+        # ------------------------------------------------------------
+
+        if isinstance(
+            raw_locations,
+            list,
+        ):
+            locations = []
+
+            for location in raw_locations:
+                if not isinstance(
+                    location,
+                    dict,
+                ):
+                    continue
+
+                try:
+                    locations.append(
+                        {
+                            "id": location.get(
+                                "id"
+                            ),
+                            "x": float(
+                                location[
+                                    "x"
+                                ]
+                            ),
+                            "y": float(
+                                location[
+                                    "y"
+                                ]
+                            ),
+                        }
+                    )
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ):
+                    continue
+
+        else:
+            # --------------------------------------------------------
+            # Backward-compatible single target.
+            # --------------------------------------------------------
+
+            locations = [
+                {
+                    "x": float(
+                        data.get(
+                            "x",
+                            42,
+                        )
+                    ),
+                    "y": float(
+                        data.get(
+                            "y",
+                            20,
+                        )
+                    ),
+                }
+            ]
+
+        if not locations:
+            await sio.emit(
+                "error",
+                {
+                    "message": (
+                        "No valid surge locations supplied"
+                    )
+                },
+                to=sid,
+            )
+            return
+
+        fraction = float(
+            data.get(
+                "fraction",
+                0.70,
+            )
+        )
+
+        radius = float(
+            data.get(
+                "radius",
+                1.4,
+            )
+        )
+
+        affected = (
+            manager.trigger_multiple_crowd_surges(
+                locations=locations,
+                fraction=fraction,
+                radius=radius,
+            )
+        )
+
+        logger.info(
+            "Crowd surge triggered for %s: "
+            "%d agents across %d locations",
+            sid,
+            affected,
+            len(locations),
+        )
+
+        await sio.emit(
+            "crowd_surge_triggered",
+            {
+                "affected_agents": affected,
+                "locations": locations,
+            },
+            to=sid,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "crowd_surge failed"
+        )
+
+        await sio.emit(
+            "error",
+            {
+                "message": (
+                    f"crowd_surge failed: "
+                    f"{exc}"
+                )
+            },
+            to=sid,
+        )
+
+
+# ----------------------------------------------------------------------
+# Config updates
+# ----------------------------------------------------------------------
+
+@sio.event
+async def update_config(
+    sid,
+    data,
+):
+    manager = _managers.get(
+        sid
+    )
+
+    if (
+        not manager
+        or not manager.venue
+    ):
+        await sio.emit(
+            "error",
+            {
+                "message": (
+                    "No active simulation "
+                    "to configure"
+                )
             },
             to=sid,
         )
@@ -178,7 +424,11 @@ async def update_config(sid, data):
         if "num_agents" in data:
             manager.init_simulation(
                 manager.venue,
-                num_agents=int(data["num_agents"]),
+                num_agents=int(
+                    data[
+                        "num_agents"
+                    ]
+                ),
             )
 
         await sio.emit(
@@ -190,37 +440,47 @@ async def update_config(sid, data):
         )
 
     except Exception as exc:
-        logger.exception("update_config failed")
+        logger.exception(
+            "update_config failed"
+        )
 
         await sio.emit(
             "error",
             {
-                "message": f"update_config failed: {exc}"
+                "message": (
+                    f"update_config failed: "
+                    f"{exc}"
+                )
             },
             to=sid,
         )
 
 
-async def _broadcast_loop(sid: str) -> None:
-    """
-    Background task:
-    - steps the simulation
-    - emits simulation_update approximately every 100ms
-    - emits bottleneck alerts
-    - emits reroute suggestions
-    """
-    manager = _managers.get(sid)
+# ----------------------------------------------------------------------
+# Broadcast loop
+# ----------------------------------------------------------------------
+
+async def _broadcast_loop(
+    sid: str,
+) -> None:
+    manager = _managers.get(
+        sid
+    )
 
     if not manager:
         return
 
     try:
-        previously_had_bottleneck = False
+        previously_had_bottleneck = (
+            False
+        )
 
         while manager.running:
             manager.step()
 
-            state = manager.get_state()
+            state = (
+                manager.get_state()
+            )
 
             await sio.emit(
                 "simulation_update",
@@ -228,37 +488,52 @@ async def _broadcast_loop(sid: str) -> None:
                 to=sid,
             )
 
-            if state.get("bottlenecks"):
+            if state["bottlenecks"]:
+
                 await sio.emit(
                     "bottleneck_alert",
                     {
-                        "bottlenecks": state["bottlenecks"],
-                        "risk": state["risk"],
+                        "bottlenecks": state[
+                            "bottlenecks"
+                        ],
+                        "risk": state[
+                            "risk"
+                        ],
                     },
                     to=sid,
                 )
 
-                previously_had_bottleneck = True
+                previously_had_bottleneck = (
+                    True
+                )
 
             elif previously_had_bottleneck:
+
                 await sio.emit(
                     "bottleneck_cleared",
                     {},
                     to=sid,
                 )
 
-                previously_had_bottleneck = False
+                previously_had_bottleneck = (
+                    False
+                )
 
-            if state.get("routes"):
+            if state["routes"]:
+
                 await sio.emit(
                     "reroute_suggestion",
                     {
-                        "routes": state["routes"],
+                        "routes": state[
+                            "routes"
+                        ]
                     },
                     to=sid,
                 )
 
-            await asyncio.sleep(BROADCAST_INTERVAL)
+            await asyncio.sleep(
+                BROADCAST_INTERVAL
+            )
 
     except asyncio.CancelledError:
         logger.info(

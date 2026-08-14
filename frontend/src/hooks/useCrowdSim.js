@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import { io } from "socket.io-client";
 
 import {
@@ -9,42 +15,11 @@ import {
   generateMockAgents,
 } from "../data/mockData";
 
-// -------------------------------------------------------------------
-// Backend configuration
-// -------------------------------------------------------------------
-//
-// Local development:
-//   http://localhost:8000
-//
-// Production:
-//   VITE_BACKEND_URL should contain the Render backend URL:
-//
-//   https://crowdsense-backend-cdaz.onrender.com
-//
-// When no production URL is supplied, the deployed Vercel version
-// can still use the same-origin backend.
-// -------------------------------------------------------------------
-
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ??
   (import.meta.env.DEV
     ? "http://localhost:8000"
     : "");
-
-// -------------------------------------------------------------------
-// Socket.IO configuration
-// -------------------------------------------------------------------
-//
-// The deployed Render backend has been verified to respond successfully
-// at:
-//
-//   /api/socket.io/?EIO=4&transport=polling
-//
-// Therefore the frontend must use /api/socket.io.
-//
-// VITE_SOCKET_PATH can override this if necessary, but the default is
-// deliberately /api/socket.io.
-// -------------------------------------------------------------------
 
 const SOCKET_PATH =
   import.meta.env.VITE_SOCKET_PATH ??
@@ -52,20 +27,16 @@ const SOCKET_PATH =
 
 const MAX_HISTORY_POINTS = 40;
 
-// -------------------------------------------------------------------
-// Hook
-// -------------------------------------------------------------------
-
 export function useCrowdSim() {
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] =
+    useState(false);
 
-  // null = still checking
-  // true = backend reachable
-  // false = backend unavailable
   const [backendAvailable, setBackendAvailable] =
     useState(null);
 
-  const [venues, setVenues] = useState([]);
+  const [venues, setVenues] =
+    useState([]);
+
   const [selectedVenueId, setSelectedVenueId] =
     useState(null);
 
@@ -75,9 +46,12 @@ export function useCrowdSim() {
   const [running, setRunning] =
     useState(false);
 
-  const [agents, setAgents] = useState(() =>
-    generateMockAgents(MOCK_VENUE)
-  );
+  const [agents, setAgents] =
+    useState(() =>
+      generateMockAgents(
+        MOCK_VENUE
+      )
+    );
 
   const [bottlenecks, setBottlenecks] =
     useState([]);
@@ -85,11 +59,19 @@ export function useCrowdSim() {
   const [routes, setRoutes] =
     useState([]);
 
+  const [appliedRoutes, setAppliedRoutes] =
+    useState([]);
+
+  const latestRoutesRef =
+    useRef([]);
+
   const [stats, setStats] =
     useState(MOCK_STATS);
 
   const [densityHistory, setDensityHistory] =
-    useState(MOCK_DENSITY_HISTORY);
+    useState(
+      MOCK_DENSITY_HISTORY
+    );
 
   const [simTime, setSimTime] =
     useState(0);
@@ -97,29 +79,22 @@ export function useCrowdSim() {
   const [rerouteApplied, setRerouteApplied] =
     useState(false);
 
-  const socketRef = useRef(null);
+  const [surgeActive, setSurgeActive] =
+    useState(false);
 
-  // -----------------------------------------------------------------
-  // Fetch venue list
-  // -----------------------------------------------------------------
+  const socketRef =
+    useRef(null);
+
+  // ---------------------------------------------------------------
+  // Venues
+  // ---------------------------------------------------------------
 
   useEffect(() => {
     let cancelled = false;
 
-    const venuesUrl =
-      `${BACKEND_URL}/api/venues`;
-
-    console.log(
-      "CrowdSense backend:",
-      BACKEND_URL || window.location.origin
-    );
-
-    console.log(
-      "CrowdSense REST venues URL:",
-      venuesUrl
-    );
-
-    fetch(venuesUrl)
+    fetch(
+      `${BACKEND_URL}/api/venues`
+    )
       .then((response) => {
         if (!response.ok) {
           throw new Error(
@@ -137,11 +112,17 @@ export function useCrowdSim() {
         const venueList =
           data?.venues || [];
 
-        setVenues(venueList);
+        setVenues(
+          venueList
+        );
 
-        setBackendAvailable(true);
+        setBackendAvailable(
+          true
+        );
 
-        if (venueList.length > 0) {
+        if (
+          venueList.length > 0
+        ) {
           setSelectedVenueId(
             venueList[0].id
           );
@@ -154,7 +135,9 @@ export function useCrowdSim() {
         );
 
         if (!cancelled) {
-          setBackendAvailable(false);
+          setBackendAvailable(
+            false
+          );
         }
       });
 
@@ -163,9 +146,9 @@ export function useCrowdSim() {
     };
   }, []);
 
-  // -----------------------------------------------------------------
-  // Fetch selected venue layout
-  // -----------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // Selected venue
+  // ---------------------------------------------------------------
 
   useEffect(() => {
     if (
@@ -177,15 +160,9 @@ export function useCrowdSim() {
 
     let cancelled = false;
 
-    const venueUrl =
-      `${BACKEND_URL}/api/venue/${selectedVenueId}`;
-
-    console.log(
-      "Fetching venue:",
-      venueUrl
-    );
-
-    fetch(venueUrl)
+    fetch(
+      `${BACKEND_URL}/api/venue/${selectedVenueId}`
+    )
       .then((response) => {
         if (!response.ok) {
           throw new Error(
@@ -215,61 +192,35 @@ export function useCrowdSim() {
     backendAvailable,
   ]);
 
-  // -----------------------------------------------------------------
-  // Socket.IO lifecycle
-  // -----------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // Socket.IO
+  // ---------------------------------------------------------------
 
   useEffect(() => {
     if (!backendAvailable) {
       return;
     }
 
-    console.log(
-      "Connecting Socket.IO to:",
-      BACKEND_URL || window.location.origin
-    );
-
-    console.log(
-      "Socket.IO path:",
-      SOCKET_PATH
-    );
-
     const socket = io(
       BACKEND_URL || undefined,
       {
         path: SOCKET_PATH,
-
-        // Start with polling because the Render
-        // backend has been verified to support it.
-        //
-        // Socket.IO can then upgrade to WebSocket.
         transports: [
           "polling",
           "websocket",
         ],
-
-        // Let Socket.IO attempt another transport
-        // if the first one fails.
         tryAllTransports: true,
-
-        // Allow polling -> websocket upgrade.
         upgrade: true,
-
-        // Keep reconnecting if the connection drops.
         reconnection: true,
-        reconnectionAttempts: Infinity,
+        reconnectionAttempts:
+          Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-
         timeout: 20000,
       }
     );
 
     socketRef.current = socket;
-
-    // ---------------------------------------------------------------
-    // Connection events
-    // ---------------------------------------------------------------
 
     socket.on(
       "connect",
@@ -277,11 +228,6 @@ export function useCrowdSim() {
         console.log(
           "Socket.IO connected:",
           socket.id
-        );
-
-        console.log(
-          "Socket.IO transport:",
-          socket.io.engine.transport.name
         );
 
         setConnected(true);
@@ -312,24 +258,6 @@ export function useCrowdSim() {
       }
     );
 
-    // ---------------------------------------------------------------
-    // Transport upgrade
-    // ---------------------------------------------------------------
-
-    socket.io.engine?.on(
-      "upgrade",
-      (transport) => {
-        console.log(
-          "Socket.IO upgraded transport to:",
-          transport.name
-        );
-      }
-    );
-
-    // ---------------------------------------------------------------
-    // Simulation started
-    // ---------------------------------------------------------------
-
     socket.on(
       "simulation_started",
       (data) => {
@@ -342,49 +270,66 @@ export function useCrowdSim() {
       }
     );
 
-    // ---------------------------------------------------------------
-    // Simulation stopped
-    // ---------------------------------------------------------------
-
     socket.on(
       "simulation_stopped",
       () => {
-        console.log(
-          "Simulation stopped"
-        );
-
         setRunning(false);
+
+        setRoutes([]);
+        setAppliedRoutes([]);
+        setBottlenecks([]);
+        setRerouteApplied(false);
+        setSurgeActive(false);
+
+        latestRoutesRef.current = [];
       }
     );
 
-    // ---------------------------------------------------------------
-    // Live simulation update
-    // ---------------------------------------------------------------
+    socket.on(
+      "crowd_surge_triggered",
+      (data) => {
+        console.log(
+          "Crowd surge triggered:",
+          data
+        );
+
+        setSurgeActive(true);
+      }
+    );
 
     socket.on(
       "simulation_update",
       (state) => {
-        // Live agents
         setAgents(
           state?.agents || []
         );
 
-        // Live bottlenecks
         setBottlenecks(
           state?.bottlenecks || []
         );
 
-        // Live reroute paths
-        setRoutes(
-          state?.routes || []
-        );
+        if (
+          Array.isArray(
+            state?.routes
+          )
+        ) {
+          setRoutes(
+            state.routes
+          );
 
-        // Live simulation clock
+          if (
+            state.routes.length > 0
+          ) {
+            latestRoutesRef.current = [
+              ...state.routes,
+            ];
+          }
+        }
+
         setSimTime(
           state?.sim_time || 0
         );
 
-        // Live dashboard statistics
         setStats({
           total_agents:
             state?.total_agents ?? 0,
@@ -397,33 +342,38 @@ export function useCrowdSim() {
 
           high_risk_zones:
             (
-              state?.bottlenecks || []
+              state?.bottlenecks ||
+              []
             ).length,
 
-          // Keep the existing dashboard
-          // flow calculation.
           avg_flow:
             Math.round(
-              (state?.total_agents || 0) *
+              (
+                state?.total_agents ||
+                0
+              ) *
                 0.02 *
                 60
             ) / 60,
         });
 
-        // Live density history
         setDensityHistory(
           (previous) => {
             const next = [
               ...previous,
               {
                 t:
-                  state?.sim_time?.toFixed(1) ??
+                  state?.sim_time?.toFixed(
+                    1
+                  ) ??
                   previous.length,
 
                 density:
                   Math.round(
-                    (state?.density || 0) *
-                      1000
+                    (
+                      state?.density ||
+                      0
+                    ) * 1000
                   ),
               },
             ];
@@ -436,18 +386,9 @@ export function useCrowdSim() {
       }
     );
 
-    // ---------------------------------------------------------------
-    // Bottleneck detected
-    // ---------------------------------------------------------------
-
     socket.on(
       "bottleneck_alert",
       (data) => {
-        console.log(
-          "BOTTLENECK DETECTED:",
-          data
-        );
-
         setBottlenecks(
           data?.bottlenecks || []
         );
@@ -456,44 +397,36 @@ export function useCrowdSim() {
       }
     );
 
-    // ---------------------------------------------------------------
-    // Bottleneck cleared
-    // ---------------------------------------------------------------
-
     socket.on(
       "bottleneck_cleared",
       () => {
-        console.log(
-          "Bottleneck cleared"
-        );
-
         setBottlenecks([]);
-
         setRerouteApplied(false);
       }
     );
 
-    // ---------------------------------------------------------------
-    // Reroute suggestion
-    // ---------------------------------------------------------------
-
     socket.on(
       "reroute_suggestion",
       (data) => {
-        console.log(
-          "Reroute suggestion:",
-          data
-        );
+        if (
+          Array.isArray(
+            data?.routes
+          ) &&
+          data.routes.length > 0
+        ) {
+          const freshRoutes = [
+            ...data.routes,
+          ];
 
-        setRoutes(
-          data?.routes || []
-        );
+          setRoutes(
+            freshRoutes
+          );
+
+          latestRoutesRef.current =
+            freshRoutes;
+        }
       }
     );
-
-    // ---------------------------------------------------------------
-    // Backend/socket errors
-    // ---------------------------------------------------------------
 
     socket.on(
       "error",
@@ -505,79 +438,118 @@ export function useCrowdSim() {
       }
     );
 
-    // ---------------------------------------------------------------
-    // Cleanup
-    // ---------------------------------------------------------------
-
     return () => {
-      console.log(
-        "Cleaning up Socket.IO connection"
-      );
-
       socket.disconnect();
-
       socketRef.current = null;
     };
   }, [backendAvailable]);
 
-  // -----------------------------------------------------------------
-  // Start simulation
-  // -----------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // Start
+  // ---------------------------------------------------------------
 
-  const startSimulation = useCallback(
-    (numAgents = 500) => {
-      if (
-        !backendAvailable ||
-        !socketRef.current ||
-        !venue
-      ) {
-        console.warn(
-          "Cannot start simulation: backend not ready"
+  const startSimulation =
+    useCallback(
+      (numAgents = 500) => {
+        if (
+          !backendAvailable ||
+          !socketRef.current ||
+          !venue
+        ) {
+          return;
+        }
+
+        setRoutes([]);
+        setAppliedRoutes([]);
+        setBottlenecks([]);
+        setDensityHistory([]);
+        setSimTime(0);
+        setRerouteApplied(false);
+        setSurgeActive(false);
+
+        latestRoutesRef.current = [];
+
+        socketRef.current.emit(
+          "start_simulation",
+          {
+            venue,
+            num_agents: numAgents,
+          }
         );
 
-        return;
-      }
+        setRunning(true);
+      },
+      [
+        backendAvailable,
+        venue,
+      ]
+    );
 
-      console.log(
-        "Starting simulation with:",
-        numAgents,
-        "agents"
-      );
+  // ---------------------------------------------------------------
+  // MULTI-LOCATION CROWD SURGE
+  // ---------------------------------------------------------------
 
-      // Reset live UI state
-      setDensityHistory([]);
-      setBottlenecks([]);
-      setRoutes([]);
-      setSimTime(0);
-      setRerouteApplied(false);
-
-      socketRef.current.emit(
-        "start_simulation",
-        {
-          venue,
-          num_agents: numAgents,
+  const crowdSurge =
+    useCallback(
+      (surgeLocations) => {
+        if (
+          !backendAvailable ||
+          !socketRef.current ||
+          !running
+        ) {
+          return;
         }
-      );
 
-      setRunning(true);
-    },
-    [
-      backendAvailable,
-      venue,
-    ]
-  );
+        if (
+          !Array.isArray(
+            surgeLocations
+          ) ||
+          surgeLocations.length === 0
+        ) {
+          console.warn(
+            "No surge locations selected."
+          );
+          return;
+        }
 
-  // -----------------------------------------------------------------
-  // Stop simulation
-  // -----------------------------------------------------------------
+        const locations =
+          surgeLocations.map(
+            (location) => ({
+              id: location.id,
+              x: location.x,
+              y: location.y,
+            })
+          );
 
-  const stopSimulation = useCallback(
-    () => {
-      console.log(
-        "Stopping simulation"
-      );
+        console.log(
+          "Triggering multi-location crowd surge:",
+          locations
+        );
 
-      if (socketRef.current) {
+        socketRef.current.emit(
+          "crowd_surge",
+          {
+            locations,
+            fraction: 0.70,
+            radius: 1.4,
+          }
+        );
+      },
+      [
+        backendAvailable,
+        running,
+      ]
+    );
+
+  // ---------------------------------------------------------------
+  // Stop
+  // ---------------------------------------------------------------
+
+  const stopSimulation =
+    useCallback(() => {
+      if (
+        socketRef.current
+      ) {
         socketRef.current.emit(
           "stop_simulation",
           {}
@@ -585,41 +557,69 @@ export function useCrowdSim() {
       }
 
       setRunning(false);
-    },
-    []
-  );
+      setRoutes([]);
+      setAppliedRoutes([]);
+      setBottlenecks([]);
+      setRerouteApplied(false);
+      setSurgeActive(false);
 
-  // -----------------------------------------------------------------
+      latestRoutesRef.current = [];
+    }, []);
+
+  // ---------------------------------------------------------------
   // Apply rerouting
-  // -----------------------------------------------------------------
+  // ---------------------------------------------------------------
 
-  const applyRerouting = useCallback(
-    () => {
-      setRerouteApplied(true);
-    },
-    []
-  );
+  const applyRerouting =
+    useCallback(() => {
+      const candidateRoutes =
+        latestRoutesRef.current;
 
-  // -----------------------------------------------------------------
-  // Primary bottleneck
-  // -----------------------------------------------------------------
+      if (
+        Array.isArray(
+          candidateRoutes
+        ) &&
+        candidateRoutes.length > 0
+      ) {
+        setAppliedRoutes(
+          [...candidateRoutes]
+        );
+
+        setRerouteApplied(
+          true
+        );
+
+        return;
+      }
+
+      if (
+        Array.isArray(routes) &&
+        routes.length > 0
+      ) {
+        setAppliedRoutes(
+          [...routes]
+        );
+
+        setRerouteApplied(
+          true
+        );
+
+        latestRoutesRef.current = [
+          ...routes,
+        ];
+      }
+    }, [routes]);
 
   const primaryBottleneck =
     bottlenecks.length > 0
       ? bottlenecks[0]
       : null;
 
-  // -----------------------------------------------------------------
-  // Hook return
-  // -----------------------------------------------------------------
-
   return {
     backendAvailable,
-
     connected,
 
     venues,
-
     venue,
 
     selectedVenueId,
@@ -633,6 +633,7 @@ export function useCrowdSim() {
     primaryBottleneck,
 
     routes,
+    appliedRoutes,
 
     stats,
     densityHistory,
@@ -642,6 +643,10 @@ export function useCrowdSim() {
 
     startSimulation,
     stopSimulation,
+
+    crowdSurge,
+    surgeActive,
+
     applyRerouting,
 
     mockBottleneck:
