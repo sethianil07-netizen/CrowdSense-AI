@@ -6,7 +6,7 @@
         },
         "api": {
             "root": "api",
-            "entrypoint": "main.app"
+            "entrypoint": "main:app"
         }
     },
     "rewrites": [
