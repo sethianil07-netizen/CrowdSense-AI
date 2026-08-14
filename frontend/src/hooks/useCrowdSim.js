@@ -8,132 +8,226 @@ import {
   generateMockAgents,
 } from "../data/mockData";
 
-// In local dev, talk to the FastAPI dev server directly. In production
-// (the Vercel deployment), fall back to same-origin — vercel.json routes
-// /api/* to the backend service on the same domain, so a relative path
-// (rather than a hardcoded localhost URL) is what actually works for
-// anyone visiting the deployed site, not just on the developer's own
-// machine.
+// Local development:
+//   http://localhost:8000
+//
+// Production:
+//   VITE_BACKEND_URL should point to the persistent Render backend.
+//
+// When VITE_BACKEND_URL is empty, the app uses the same-origin Vercel
+// backend instead.
 const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
+  import.meta.env.VITE_BACKEND_URL ??
+  (import.meta.env.DEV ? "http://localhost:8000" : "");
 
-// Socket.io path is namespaced under /api to match vercel.json, which
-// only rewrites /api/* traffic to the backend service — the default
-// /socket.io/ path would miss that rewrite entirely in production. Must
-// match the server's socketio_path in backend/sockets.py exactly.
-const SOCKET_PATH = "/api/socket.io";
+// Vercel uses /api/socket.io because its rewrite sends /api/* to the
+// backend service.
+//
+// Render uses the normal Socket.IO endpoint /socket.io.
+//
+// This can also be explicitly overridden with VITE_SOCKET_PATH.
+const SOCKET_PATH =
+  import.meta.env.VITE_SOCKET_PATH ??
+  (BACKEND_URL ? "/socket.io" : "/api/socket.io");
 
 const MAX_HISTORY_POINTS = 40;
 
 /**
- * Owns the connection to the CrowdSense backend: fetches the venue list,
- * opens a Socket.io connection, starts/stops simulations, and folds
- * incoming `simulation_update` / `bottleneck_alert` / `reroute_suggestion`
- * events into React state the dashboard can render.
+ * Owns the connection to the CrowdSense backend:
+ * - fetches venue data
+ * - opens Socket.IO connection
+ * - starts/stops simulations
+ * - receives live simulation updates
+ * - handles bottleneck and reroute events
  *
- * If the backend isn't reachable, falls back to static mock data so the
- * UI is still fully demoable (Phase 1 of the build plan).
+ * If the backend is unreachable, the UI falls back to demo data.
  */
 export function useCrowdSim() {
   const [connected, setConnected] = useState(false);
-  const [backendAvailable, setBackendAvailable] = useState(null); // null = unknown yet
+  const [backendAvailable, setBackendAvailable] = useState(null);
   const [venues, setVenues] = useState([]);
   const [selectedVenueId, setSelectedVenueId] = useState(null);
   const [venue, setVenue] = useState(MOCK_VENUE);
   const [running, setRunning] = useState(false);
-  const [agents, setAgents] = useState(() => generateMockAgents(MOCK_VENUE));
+  const [agents, setAgents] = useState(() =>
+    generateMockAgents(MOCK_VENUE)
+  );
   const [bottlenecks, setBottlenecks] = useState([]);
   const [routes, setRoutes] = useState([]);
   const [stats, setStats] = useState(MOCK_STATS);
-  const [densityHistory, setDensityHistory] = useState(MOCK_DENSITY_HISTORY);
+  const [densityHistory, setDensityHistory] =
+    useState(MOCK_DENSITY_HISTORY);
   const [simTime, setSimTime] = useState(0);
   const [rerouteApplied, setRerouteApplied] = useState(false);
 
   const socketRef = useRef(null);
 
-  // --- fetch venue list on mount -------------------------------------
+  // -------------------------------------------------------------------
+  // Fetch venue list
+  // -------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
+
     fetch(`${BACKEND_URL}/api/venues`)
       .then((r) => {
-        if (!r.ok) throw new Error("bad response");
+        if (!r.ok) {
+          throw new Error(`Venue request failed: ${r.status}`);
+        }
+
         return r.json();
       })
       .then((data) => {
         if (cancelled) return;
-        setVenues(data.venues || []);
+
+        const venueList = data.venues || [];
+
+        setVenues(venueList);
         setBackendAvailable(true);
-        if (data.venues && data.venues.length > 0) {
-          setSelectedVenueId(data.venues[0].id);
+
+        if (venueList.length > 0) {
+          setSelectedVenueId(venueList[0].id);
         }
       })
-      .catch(() => {
-        if (!cancelled) setBackendAvailable(false);
+      .catch((error) => {
+        console.error("Backend venue request failed:", error);
+
+        if (!cancelled) {
+          setBackendAvailable(false);
+        }
       });
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // --- fetch full venue layout whenever selection changes ------------
+  // -------------------------------------------------------------------
+  // Fetch selected venue layout
+  // -------------------------------------------------------------------
   useEffect(() => {
-    if (!selectedVenueId || !backendAvailable) return;
+    if (!selectedVenueId || !backendAvailable) {
+      return;
+    }
+
     let cancelled = false;
+
     fetch(`${BACKEND_URL}/api/venue/${selectedVenueId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled) setVenue(data);
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error(`Venue detail request failed: ${r.status}`);
+        }
+
+        return r.json();
       })
-      .catch(() => {});
+      .then((data) => {
+        if (!cancelled) {
+          setVenue(data);
+        }
+      })
+      .catch((error) => {
+        console.error("Venue detail request failed:", error);
+      });
+
     return () => {
       cancelled = true;
     };
   }, [selectedVenueId, backendAvailable]);
 
-  // --- socket lifecycle -----------------------------------------------
+  // -------------------------------------------------------------------
+  // Socket.IO lifecycle
+  // -------------------------------------------------------------------
   useEffect(() => {
-    if (!backendAvailable) return;
+    if (!backendAvailable) {
+      return;
+    }
 
-    // Passing `undefined` (rather than an empty string) tells socket.io
-    // to connect to the page's own origin — what we want in production,
-    // where BACKEND_URL is intentionally "".
+    console.log("Connecting to backend:", BACKEND_URL || window.location.origin);
+    console.log("Socket.IO path:", SOCKET_PATH);
+
     const socket = io(BACKEND_URL || undefined, {
       transports: ["websocket", "polling"],
       path: SOCKET_PATH,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
+
     socketRef.current = socket;
 
-    socket.on("connect", () => setConnected(true));
-    socket.on("disconnect", () => setConnected(false));
+    socket.on("connect", () => {
+      console.log("Socket.IO connected:", socket.id);
+      setConnected(true);
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.warn("Socket.IO disconnected:", reason);
+      setConnected(false);
+    });
+
+    socket.on("connect_error", (error) => {
+      console.error("Socket.IO connection error:", error);
+      setConnected(false);
+    });
 
     socket.on("simulation_update", (state) => {
       setAgents(state.agents || []);
       setBottlenecks(state.bottlenecks || []);
       setRoutes(state.routes || []);
       setSimTime(state.sim_time || 0);
+
       setStats({
         total_agents: state.total_agents,
         density: state.density,
         risk: state.risk,
         high_risk_zones: (state.bottlenecks || []).length,
-        avg_flow: Math.round((state.total_agents || 0) * 0.02 * 60) / 60, // rough live estimate
+        avg_flow:
+          Math.round((state.total_agents || 0) * 0.02 * 60) / 60,
       });
+
       setDensityHistory((prev) => {
         const next = [
           ...prev,
-          { t: state.sim_time?.toFixed(1) ?? prev.length, density: Math.round((state.density || 0) * 1000) },
+          {
+            t: state.sim_time?.toFixed(1) ?? prev.length,
+            density: Math.round((state.density || 0) * 1000),
+          },
         ];
+
         return next.slice(-MAX_HISTORY_POINTS);
       });
     });
 
-    socket.on("bottleneck_alert", () => {
+    socket.on("simulation_started", (data) => {
+      console.log("Simulation started:", data);
+      setRunning(true);
+    });
+
+    socket.on("simulation_stopped", () => {
+      console.log("Simulation stopped");
+      setRunning(false);
+    });
+
+    socket.on("bottleneck_alert", (data) => {
+      console.log("BOTTLENECK DETECTED:", data);
       setRerouteApplied(false);
     });
 
     socket.on("bottleneck_cleared", () => {
+      console.log("Bottleneck cleared");
+
       setBottlenecks([]);
       setRerouteApplied(false);
+    });
+
+    socket.on("reroute_suggestion", (data) => {
+      console.log("Reroute suggestion:", data);
+      setRoutes(data.routes || []);
+    });
+
+    socket.on("error", (data) => {
+      console.error("Backend simulation error:", data);
     });
 
     return () => {
@@ -142,13 +236,26 @@ export function useCrowdSim() {
     };
   }, [backendAvailable]);
 
-  // --- controls ---------------------------------------------------------
+  // -------------------------------------------------------------------
+  // Controls
+  // -------------------------------------------------------------------
   const startSimulation = useCallback(
     (numAgents = 500) => {
-      if (!backendAvailable || !socketRef.current || !venue) return;
+      if (!backendAvailable || !socketRef.current || !venue) {
+        console.warn("Cannot start simulation: backend not ready");
+        return;
+      }
+
       setDensityHistory([]);
+      setBottlenecks([]);
+      setRoutes([]);
       setRerouteApplied(false);
-      socketRef.current.emit("start_simulation", { venue, num_agents: numAgents });
+
+      socketRef.current.emit("start_simulation", {
+        venue,
+        num_agents: numAgents,
+      });
+
       setRunning(true);
     },
     [backendAvailable, venue]
@@ -158,20 +265,19 @@ export function useCrowdSim() {
     if (socketRef.current) {
       socketRef.current.emit("stop_simulation", {});
     }
+
     setRunning(false);
   }, []);
 
   const applyRerouting = useCallback(() => {
-    // The backend already reroutes automatically each physics step once
-    // a bottleneck is detected; this flags it as acknowledged in the UI
-    // and is what visually snaps the recommended path onto the map.
     setRerouteApplied(true);
   }, []);
 
-  const primaryBottleneck = bottlenecks.length > 0 ? bottlenecks[0] : null;
+  const primaryBottleneck =
+    bottlenecks.length > 0 ? bottlenecks[0] : null;
 
   return {
-    backendAvailable,     // null = checking, true/false once known
+    backendAvailable,
     connected,
     venues,
     venue,
