@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
+
 import {
   MOCK_VENUE,
   MOCK_STATS,
@@ -8,56 +9,117 @@ import {
   generateMockAgents,
 } from "../data/mockData";
 
+// -------------------------------------------------------------------
+// Backend configuration
+// -------------------------------------------------------------------
+//
 // Local development:
 //   http://localhost:8000
 //
 // Production:
-//   VITE_BACKEND_URL points to the persistent Render backend.
+//   VITE_BACKEND_URL should contain the Render backend URL:
 //
-// If VITE_BACKEND_URL is empty, production falls back to the same-origin
-// Vercel backend.
+//   https://crowdsense-backend-cdaz.onrender.com
+//
+// When no production URL is supplied, the deployed Vercel version
+// can still use the same-origin backend.
+// -------------------------------------------------------------------
+
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ??
-  (import.meta.env.DEV ? "http://localhost:8000" : "");
+  (import.meta.env.DEV
+    ? "http://localhost:8000"
+    : "");
 
-// Vercel uses /api/socket.io.
-// Render uses the normal /socket.io endpoint.
+// -------------------------------------------------------------------
+// Socket.IO configuration
+// -------------------------------------------------------------------
 //
-// When VITE_BACKEND_URL is set, use Render's normal Socket.IO path.
-// Otherwise use Vercel's /api/socket.io route.
+// The deployed Render backend has been verified to respond successfully
+// at:
+//
+//   /api/socket.io/?EIO=4&transport=polling
+//
+// Therefore the frontend must use /api/socket.io.
+//
+// VITE_SOCKET_PATH can override this if necessary, but the default is
+// deliberately /api/socket.io.
+// -------------------------------------------------------------------
+
 const SOCKET_PATH =
   import.meta.env.VITE_SOCKET_PATH ??
-  (BACKEND_URL ? "/socket.io" : "/api/socket.io");
+  "/api/socket.io";
 
 const MAX_HISTORY_POINTS = 40;
 
+// -------------------------------------------------------------------
+// Hook
+// -------------------------------------------------------------------
+
 export function useCrowdSim() {
   const [connected, setConnected] = useState(false);
-  const [backendAvailable, setBackendAvailable] = useState(null);
+
+  // null = still checking
+  // true = backend reachable
+  // false = backend unavailable
+  const [backendAvailable, setBackendAvailable] =
+    useState(null);
+
   const [venues, setVenues] = useState([]);
-  const [selectedVenueId, setSelectedVenueId] = useState(null);
-  const [venue, setVenue] = useState(MOCK_VENUE);
-  const [running, setRunning] = useState(false);
+  const [selectedVenueId, setSelectedVenueId] =
+    useState(null);
+
+  const [venue, setVenue] =
+    useState(MOCK_VENUE);
+
+  const [running, setRunning] =
+    useState(false);
+
   const [agents, setAgents] = useState(() =>
     generateMockAgents(MOCK_VENUE)
   );
-  const [bottlenecks, setBottlenecks] = useState([]);
-  const [routes, setRoutes] = useState([]);
-  const [stats, setStats] = useState(MOCK_STATS);
+
+  const [bottlenecks, setBottlenecks] =
+    useState([]);
+
+  const [routes, setRoutes] =
+    useState([]);
+
+  const [stats, setStats] =
+    useState(MOCK_STATS);
+
   const [densityHistory, setDensityHistory] =
     useState(MOCK_DENSITY_HISTORY);
-  const [simTime, setSimTime] = useState(0);
-  const [rerouteApplied, setRerouteApplied] = useState(false);
+
+  const [simTime, setSimTime] =
+    useState(0);
+
+  const [rerouteApplied, setRerouteApplied] =
+    useState(false);
 
   const socketRef = useRef(null);
 
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
   // Fetch venue list
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`${BACKEND_URL}/api/venues`)
+    const venuesUrl =
+      `${BACKEND_URL}/api/venues`;
+
+    console.log(
+      "CrowdSense backend:",
+      BACKEND_URL || window.location.origin
+    );
+
+    console.log(
+      "CrowdSense REST venues URL:",
+      venuesUrl
+    );
+
+    fetch(venuesUrl)
       .then((response) => {
         if (!response.ok) {
           throw new Error(
@@ -68,15 +130,21 @@ export function useCrowdSim() {
         return response.json();
       })
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled) {
+          return;
+        }
 
-        const venueList = data.venues || [];
+        const venueList =
+          data?.venues || [];
 
         setVenues(venueList);
+
         setBackendAvailable(true);
 
         if (venueList.length > 0) {
-          setSelectedVenueId(venueList[0].id);
+          setSelectedVenueId(
+            venueList[0].id
+          );
         }
       })
       .catch((error) => {
@@ -95,17 +163,29 @@ export function useCrowdSim() {
     };
   }, []);
 
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
   // Fetch selected venue layout
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+
   useEffect(() => {
-    if (!selectedVenueId || !backendAvailable) {
+    if (
+      !selectedVenueId ||
+      !backendAvailable
+    ) {
       return;
     }
 
     let cancelled = false;
 
-    fetch(`${BACKEND_URL}/api/venue/${selectedVenueId}`)
+    const venueUrl =
+      `${BACKEND_URL}/api/venue/${selectedVenueId}`;
+
+    console.log(
+      "Fetching venue:",
+      venueUrl
+    );
+
+    fetch(venueUrl)
       .then((response) => {
         if (!response.ok) {
           throw new Error(
@@ -130,153 +210,236 @@ export function useCrowdSim() {
     return () => {
       cancelled = true;
     };
-  }, [selectedVenueId, backendAvailable]);
+  }, [
+    selectedVenueId,
+    backendAvailable,
+  ]);
 
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
   // Socket.IO lifecycle
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+
   useEffect(() => {
     if (!backendAvailable) {
       return;
     }
 
-    const socket = io(BACKEND_URL || undefined, {
-      path: SOCKET_PATH,
-
-      // Start with polling because this is confirmed to work on Render.
-      // Socket.IO can then upgrade the connection to WebSocket.
-      transports: ["polling", "websocket"],
-
-      // Let Socket.IO try another transport if the first transport fails.
-      tryAllTransports: true,
-
-      // Allow normal polling -> WebSocket upgrade.
-      upgrade: true,
-
-      // Keep the connection alive.
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
-    });
-
-    socketRef.current = socket;
-
     console.log(
-      "CrowdSense backend:",
+      "Connecting Socket.IO to:",
       BACKEND_URL || window.location.origin
     );
 
     console.log(
-      "CrowdSense Socket.IO path:",
+      "Socket.IO path:",
       SOCKET_PATH
     );
 
-    socket.on("connect", () => {
-      console.log(
-        "Socket.IO connected:",
-        socket.id
-      );
+    const socket = io(
+      BACKEND_URL || undefined,
+      {
+        path: SOCKET_PATH,
 
-      setConnected(true);
-    });
+        // Start with polling because the Render
+        // backend has been verified to support it.
+        //
+        // Socket.IO can then upgrade to WebSocket.
+        transports: [
+          "polling",
+          "websocket",
+        ],
 
-    socket.on("disconnect", (reason) => {
-      console.warn(
-        "Socket.IO disconnected:",
-        reason
-      );
+        // Let Socket.IO attempt another transport
+        // if the first one fails.
+        tryAllTransports: true,
 
-      setConnected(false);
-    });
+        // Allow polling -> websocket upgrade.
+        upgrade: true,
 
-    socket.on("connect_error", (error) => {
-      console.error(
-        "Socket.IO connection error:",
-        error
-      );
+        // Keep reconnecting if the connection drops.
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
 
-      setConnected(false);
-    });
+        timeout: 20000,
+      }
+    );
 
-    socket.on("simulation_started", (data) => {
-      console.log(
-        "Simulation started:",
-        data
-      );
+    socketRef.current = socket;
 
-      setRunning(true);
-    });
+    // ---------------------------------------------------------------
+    // Connection events
+    // ---------------------------------------------------------------
 
-    socket.on("simulation_stopped", () => {
-      console.log("Simulation stopped");
-
-      setRunning(false);
-    });
-
-    // -----------------------------------------------------------------
-    // Live simulation updates
-    // -----------------------------------------------------------------
-    socket.on("simulation_update", (state) => {
-      setAgents(state.agents || []);
-
-      setBottlenecks(
-        state.bottlenecks || []
-      );
-
-      setRoutes(
-        state.routes || []
-      );
-
-      setSimTime(
-        state.sim_time || 0
-      );
-
-      setStats({
-        total_agents:
-          state.total_agents ?? 0,
-
-        density:
-          state.density ?? 0,
-
-        risk:
-          state.risk ?? "LOW",
-
-        high_risk_zones:
-          (state.bottlenecks || []).length,
-
-        avg_flow:
-          Math.round(
-            (state.total_agents || 0) *
-              0.02 *
-              60
-          ) / 60,
-      });
-
-      setDensityHistory((previous) => {
-        const next = [
-          ...previous,
-          {
-            t:
-              state.sim_time?.toFixed(1) ??
-              previous.length,
-
-            density: Math.round(
-              (state.density || 0) * 1000
-            ),
-          },
-        ];
-
-        return next.slice(
-          -MAX_HISTORY_POINTS
+    socket.on(
+      "connect",
+      () => {
+        console.log(
+          "Socket.IO connected:",
+          socket.id
         );
-      });
-    });
 
-    // -----------------------------------------------------------------
-    // Bottleneck events
-    // -----------------------------------------------------------------
+        console.log(
+          "Socket.IO transport:",
+          socket.io.engine.transport.name
+        );
+
+        setConnected(true);
+      }
+    );
+
+    socket.on(
+      "disconnect",
+      (reason) => {
+        console.warn(
+          "Socket.IO disconnected:",
+          reason
+        );
+
+        setConnected(false);
+      }
+    );
+
+    socket.on(
+      "connect_error",
+      (error) => {
+        console.error(
+          "Socket.IO connection error:",
+          error
+        );
+
+        setConnected(false);
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Transport upgrade
+    // ---------------------------------------------------------------
+
+    socket.io.engine?.on(
+      "upgrade",
+      (transport) => {
+        console.log(
+          "Socket.IO upgraded transport to:",
+          transport.name
+        );
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Simulation started
+    // ---------------------------------------------------------------
+
+    socket.on(
+      "simulation_started",
+      (data) => {
+        console.log(
+          "Simulation started:",
+          data
+        );
+
+        setRunning(true);
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Simulation stopped
+    // ---------------------------------------------------------------
+
+    socket.on(
+      "simulation_stopped",
+      () => {
+        console.log(
+          "Simulation stopped"
+        );
+
+        setRunning(false);
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Live simulation update
+    // ---------------------------------------------------------------
+
+    socket.on(
+      "simulation_update",
+      (state) => {
+        // Live agents
+        setAgents(
+          state?.agents || []
+        );
+
+        // Live bottlenecks
+        setBottlenecks(
+          state?.bottlenecks || []
+        );
+
+        // Live reroute paths
+        setRoutes(
+          state?.routes || []
+        );
+
+        // Live simulation clock
+        setSimTime(
+          state?.sim_time || 0
+        );
+
+        // Live dashboard statistics
+        setStats({
+          total_agents:
+            state?.total_agents ?? 0,
+
+          density:
+            state?.density ?? 0,
+
+          risk:
+            state?.risk ?? "LOW",
+
+          high_risk_zones:
+            (
+              state?.bottlenecks || []
+            ).length,
+
+          // Keep the existing dashboard
+          // flow calculation.
+          avg_flow:
+            Math.round(
+              (state?.total_agents || 0) *
+                0.02 *
+                60
+            ) / 60,
+        });
+
+        // Live density history
+        setDensityHistory(
+          (previous) => {
+            const next = [
+              ...previous,
+              {
+                t:
+                  state?.sim_time?.toFixed(1) ??
+                  previous.length,
+
+                density:
+                  Math.round(
+                    (state?.density || 0) *
+                      1000
+                  ),
+              },
+            ];
+
+            return next.slice(
+              -MAX_HISTORY_POINTS
+            );
+          }
+        );
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Bottleneck detected
+    // ---------------------------------------------------------------
+
     socket.on(
       "bottleneck_alert",
       (data) => {
@@ -293,6 +456,10 @@ export function useCrowdSim() {
       }
     );
 
+    // ---------------------------------------------------------------
+    // Bottleneck cleared
+    // ---------------------------------------------------------------
+
     socket.on(
       "bottleneck_cleared",
       () => {
@@ -301,13 +468,15 @@ export function useCrowdSim() {
         );
 
         setBottlenecks([]);
+
         setRerouteApplied(false);
       }
     );
 
-    // -----------------------------------------------------------------
-    // Reroute events
-    // -----------------------------------------------------------------
+    // ---------------------------------------------------------------
+    // Reroute suggestion
+    // ---------------------------------------------------------------
+
     socket.on(
       "reroute_suggestion",
       (data) => {
@@ -322,25 +491,39 @@ export function useCrowdSim() {
       }
     );
 
-    // -----------------------------------------------------------------
-    // Backend errors
-    // -----------------------------------------------------------------
-    socket.on("error", (data) => {
-      console.error(
-        "Backend simulation error:",
-        data
-      );
-    });
+    // ---------------------------------------------------------------
+    // Backend/socket errors
+    // ---------------------------------------------------------------
+
+    socket.on(
+      "error",
+      (data) => {
+        console.error(
+          "Backend simulation error:",
+          data
+        );
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Cleanup
+    // ---------------------------------------------------------------
 
     return () => {
+      console.log(
+        "Cleaning up Socket.IO connection"
+      );
+
       socket.disconnect();
+
       socketRef.current = null;
     };
   }, [backendAvailable]);
 
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
   // Start simulation
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+
   const startSimulation = useCallback(
     (numAgents = 500) => {
       if (
@@ -356,11 +539,12 @@ export function useCrowdSim() {
       }
 
       console.log(
-        "Starting simulation with",
+        "Starting simulation with:",
         numAgents,
         "agents"
       );
 
+      // Reset live UI state
       setDensityHistory([]);
       setBottlenecks([]);
       setRoutes([]);
@@ -383,11 +567,16 @@ export function useCrowdSim() {
     ]
   );
 
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
   // Stop simulation
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+
   const stopSimulation = useCallback(
     () => {
+      console.log(
+        "Stopping simulation"
+      );
+
       if (socketRef.current) {
         socketRef.current.emit(
           "stop_simulation",
@@ -400,9 +589,10 @@ export function useCrowdSim() {
     []
   );
 
-  // -------------------------------------------------------------------
-  // Apply rerouting in UI
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Apply rerouting
+  // -----------------------------------------------------------------
+
   const applyRerouting = useCallback(
     () => {
       setRerouteApplied(true);
@@ -410,14 +600,24 @@ export function useCrowdSim() {
     []
   );
 
+  // -----------------------------------------------------------------
+  // Primary bottleneck
+  // -----------------------------------------------------------------
+
   const primaryBottleneck =
     bottlenecks.length > 0
       ? bottlenecks[0]
       : null;
 
+  // -----------------------------------------------------------------
+  // Hook return
+  // -----------------------------------------------------------------
+
   return {
     backendAvailable,
+
     connected,
+
     venues,
 
     venue,
