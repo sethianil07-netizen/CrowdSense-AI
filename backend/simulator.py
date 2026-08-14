@@ -10,12 +10,13 @@ broadcast over Socket.io.
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import time
 from typing import Dict, List, Optional
 
 from agents import Agent
-from bottleneck import detect_bottlenecks, suggest_rerouting
+from bottleneck import detect_bottlenecks, suggest_rerouting, build_base_nav_graph
 from physics import update_crowd
 from venue import Venue
 
@@ -40,6 +41,7 @@ class SimulationManager:
         self.step_count: int = 0
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._nav_cache: Optional[dict] = None  # built once per venue, see init_simulation
 
     # ------------------------------------------------------------------
     # Setup
@@ -54,21 +56,49 @@ class SimulationManager:
         self.sim_time = 0.0
         self.step_count = 0
 
+        # Build the walkable nav graph once per venue and cache it — this
+        # is the expensive part of rerouting (grid construction + edge
+        # wiring), and the venue layout never changes mid-simulation, so
+        # rebuilding it every step (the original implementation) wasted
+        # 50-200ms per tick for no reason once a bottleneck appeared.
+        self._nav_cache = build_base_nav_graph(venue)
+
         if not venue.entry_points:
             raise ValueError("Venue has no entry points to spawn agents at")
 
-        for i in range(num_agents):
-            entry = random.choice(venue.entry_points)
+        # First pass: decide which gate each agent spawns at, so we know
+        # how many agents are sharing each gate before placing anyone.
+        # This matters because a fixed tiny spawn box (the old behavior)
+        # is fine for 50 agents but crushes 750 agents into an
+        # instant 8+ people/m^2 pile the moment a big crowd is spawned —
+        # they'd be stuck jostling in place instead of actually walking
+        # anywhere. Spreading the spawn area with crowd size fixes that.
+        assignments = [random.choice(venue.entry_points) for _ in range(num_agents)]
+        per_gate_count: Dict[str, int] = {}
+        for entry in assignments:
+            per_gate_count[entry.id] = per_gate_count.get(entry.id, 0) + 1
+
+        for entry in assignments:
             goal_x, goal_y = self._random_destination(venue)
 
-            # Small random jitter so agents don't spawn stacked exactly
-            # on top of one another.
-            jitter_x = random.uniform(-1.0, 1.0)
-            jitter_y = random.uniform(-1.0, 1.0)
+            # Spawn radius scales with how many agents share this gate,
+            # so density stays well under the 4 people/m^2 bottleneck
+            # threshold at t=0. sqrt scaling keeps area proportional to
+            # count while avoiding an unreasonably large radius for huge
+            # crowds.
+            n_here = per_gate_count.get(entry.id, 1)
+            spawn_radius = max(1.5, min(20.0, math.sqrt(n_here) * 0.9))
+
+            # Uniform-area sampling within a disk (not a square), so
+            # density is even rather than corner-peaked.
+            angle = random.uniform(0, 2 * math.pi)
+            r = spawn_radius * math.sqrt(random.uniform(0, 1))
+            offset_x = r * math.cos(angle)
+            offset_y = r * math.sin(angle)
 
             agent = Agent(
-                x=max(0.0, min(venue.width, entry.x + jitter_x)),
-                y=max(0.0, min(venue.height, entry.y + jitter_y)),
+                x=max(0.0, min(venue.width, entry.x + offset_x)),
+                y=max(0.0, min(venue.height, entry.y + offset_y)),
                 goal_x=goal_x,
                 goal_y=goal_y,
                 entry_point=entry.id,
@@ -114,7 +144,9 @@ class SimulationManager:
 
         self.bottlenecks = detect_bottlenecks(self.agents, self.venue)
         if self.bottlenecks:
-            self.routes = suggest_rerouting(self.agents, self.venue, self.bottlenecks)
+            self.routes = suggest_rerouting(
+                self.agents, self.venue, self.bottlenecks, nav_cache=self._nav_cache
+            )
             self._apply_routes(self.routes)
         else:
             self.routes = []

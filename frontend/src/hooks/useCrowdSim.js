@@ -8,9 +8,7 @@ import {
   generateMockAgents,
 } from "../data/mockData";
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL ||
-  (import.meta.env.DEV ? "http://localhost:8000" : "/api");
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const MAX_HISTORY_POINTS = 40;
 
 /**

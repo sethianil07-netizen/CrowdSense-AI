@@ -83,32 +83,33 @@ def detect_bottlenecks(
 # Rerouting: build a coarse walkable grid graph and run A*
 # ----------------------------------------------------------------------
 
-def _build_nav_graph(venue: Venue, blocked_cells: set) -> Tuple[nx.Graph, Dict[Tuple[int, int], Tuple[float, float]]]:
-    """Construct a grid graph over the venue at GRAPH_NODE_SPACING
-    resolution, skipping nodes that fall inside obstacles or inside a
-    currently-congested (blocked) cell."""
+def build_base_nav_graph(venue: Venue) -> dict:
+    """
+    Build the venue's walkable navigation graph *once* (pure walkability —
+    no knowledge of current crowd congestion). This is the expensive part
+    (grid construction + edge wiring), so callers should build it a single
+    time per venue and reuse the cache across every simulation step,
+    rather than rebuilding it every time congestion is rechecked (which
+    is what the initial implementation did, and was the main cause of a
+    real single-step cost of 100-200ms once bottlenecks appeared).
+
+    Returns a dict: {"graph", "node_positions", "kdtree", "node_list"}
+    where kdtree/node_list support fast nearest-node lookup via SciPy.
+    """
     graph = nx.Graph()
     node_positions: Dict[Tuple[int, int], Tuple[float, float]] = {}
 
     cols = int(venue.width // GRAPH_NODE_SPACING) + 1
     rows = int(venue.height // GRAPH_NODE_SPACING) + 1
 
-    def node_blocked(i: int, j: int) -> bool:
-        x, y = i * GRAPH_NODE_SPACING, j * GRAPH_NODE_SPACING
-        if not venue.is_walkable(x, y):
-            return True
-        cell = _cell_for(x, y)
-        return cell in blocked_cells
-
     for i in range(cols):
         for j in range(rows):
-            if node_blocked(i, j):
-                continue
             x, y = i * GRAPH_NODE_SPACING, j * GRAPH_NODE_SPACING
+            if not venue.is_walkable(x, y):
+                continue
             node_positions[(i, j)] = (x, y)
             graph.add_node((i, j), pos=(x, y))
 
-    # Connect each node to its 8-directional neighbors.
     for (i, j) in list(graph.nodes):
         for di, dj in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
             neighbor = (i + di, j + dj)
@@ -116,10 +117,34 @@ def _build_nav_graph(venue: Venue, blocked_cells: set) -> Tuple[nx.Graph, Dict[T
                 dist = math.hypot(di * GRAPH_NODE_SPACING, dj * GRAPH_NODE_SPACING)
                 graph.add_edge((i, j), neighbor, weight=dist)
 
-    return graph, node_positions
+    node_list = list(node_positions.keys())
+    kdtree = None
+    if node_list:
+        import numpy as np
+        from scipy.spatial import cKDTree
+        coords = np.array([node_positions[n] for n in node_list], dtype=np.float64)
+        kdtree = cKDTree(coords)
+
+    return {
+        "graph": graph,
+        "node_positions": node_positions,
+        "kdtree": kdtree,
+        "node_list": node_list,
+    }
+
+
+def _nearest_node_fast(pos: Tuple[float, float], nav_cache: dict):
+    """O(log n) nearest-node lookup via the cached KD-tree, instead of
+    scanning every node per call."""
+    if nav_cache["kdtree"] is None:
+        return None
+    _, idx = nav_cache["kdtree"].query(pos)
+    return nav_cache["node_list"][idx]
 
 
 def _nearest_node(pos: Tuple[float, float], node_positions: Dict[Tuple[int, int], Tuple[float, float]]):
+    """Fallback linear-scan nearest-node lookup, used only when no
+    cached KD-tree is available (e.g. ad-hoc/test calls)."""
     bx, by = pos
     best_node, best_dist = None, math.inf
     for node, (nx_, ny_) in node_positions.items():
@@ -141,11 +166,18 @@ def suggest_rerouting(
     agents: Sequence[Agent],
     venue: Venue,
     bottlenecks: List[dict] = None,
+    nav_cache: dict = None,
 ) -> List[dict]:
     """
     For agents whose current target lies in (or near) a detected
     bottleneck cell, compute an alternate path to the nearest exit using
     A* over a coarse walkable navigation graph, avoiding congested cells.
+
+    `nav_cache` should be the dict returned by `build_base_nav_graph`,
+    built once per venue and reused across steps by the caller (see
+    SimulationManager). If omitted, a graph is built on the fly — fine
+    for one-off/test calls, but callers running a live simulation loop
+    should always pass a cached graph to avoid rebuilding it every step.
 
     Returns: [{agent_id, new_path: [(x, y), ...]}, ...]
     """
@@ -154,15 +186,53 @@ def suggest_rerouting(
     if not bottlenecks or not venue.exit_points:
         return []
 
-    blocked_cells = {(_cell_for(b["x"], b["y"])) for b in bottlenecks}
-    graph, node_positions = _build_nav_graph(venue, blocked_cells)
+    if nav_cache is None:
+        nav_cache = build_base_nav_graph(venue)
+
+    graph = nav_cache["graph"]
+    node_positions = nav_cache["node_positions"]
     if not graph.nodes:
         return []
+
+    blocked_cells = {(_cell_for(b["x"], b["y"])) for b in bottlenecks}
+    blocked_nodes = {
+        node for node, pos in node_positions.items() if _cell_for(*pos) in blocked_cells
+    }
+
+    def make_edge_weight(exempt_node):
+        # Returning None tells networkx to treat the edge as untraversable,
+        # so congested cells are avoided without touching the graph itself.
+        # `exempt_node` (the agent's own start node) is excluded from the
+        # block — an agent standing inside a congested cell still needs to
+        # be able to leave it, so we only block *other* congested nodes
+        # from being routed *through*.
+        def edge_weight(u, v, data):
+            if (u in blocked_nodes and u != exempt_node) or (v in blocked_nodes and v != exempt_node):
+                return None
+            return data.get("weight", 1.0)
+        return edge_weight
 
     heuristic = _heuristic(node_positions)
     suggestions: List[dict] = []
 
+    # Packed agents overwhelmingly share the same nearest nav-graph node,
+    # so cache each node's best A* path rather than recomputing it once
+    # per agent. This is what actually bounds the cost when hundreds of
+    # agents are jammed into the same small crush zone — the number of
+    # *distinct* start nodes stays small (bounded by graph resolution)
+    # even when the agent count is huge.
+    path_cache: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+
+    # Still cap total suggestions returned, purely to keep the Socket.io
+    # payload (and the frontend's SVG render) bounded when a crush spans
+    # thousands of agents — beyond this, agents rely on the normal
+    # social-force repulsion to disperse rather than an explicit path.
+    max_suggestions = 300
+
     for agent in agents:
+        if len(suggestions) >= max_suggestions:
+            break
+
         target_cell = _cell_for(agent.goal_x, agent.goal_y)
         agent_cell = _cell_for(agent.x, agent.y)
         near_bottleneck = any(
@@ -172,33 +242,37 @@ def suggest_rerouting(
         if not near_bottleneck:
             continue
 
-        start_node = _nearest_node((agent.x, agent.y), node_positions)
+        start_node = _nearest_node_fast((agent.x, agent.y), nav_cache)
         if start_node is None:
             continue
 
-        # Route to whichever exit yields the shortest safe A* path.
-        best_path_coords = None
-        best_length = math.inf
-        for exit_point in venue.exit_points:
-            goal_node = _nearest_node((exit_point.x, exit_point.y), node_positions)
-            if goal_node is None or goal_node not in graph:
-                continue
-            try:
-                path_nodes = nx.astar_path(
-                    graph, start_node, goal_node,
-                    heuristic=heuristic, weight="weight",
+        if start_node in path_cache:
+            best_path_coords = path_cache[start_node]
+        else:
+            # Route to whichever exit yields the shortest safe A* path.
+            best_path_coords = None
+            best_length = math.inf
+            for exit_point in venue.exit_points:
+                goal_node = _nearest_node_fast((exit_point.x, exit_point.y), nav_cache)
+                if goal_node is None or goal_node not in graph or goal_node in blocked_nodes:
+                    continue
+                try:
+                    path_nodes = nx.astar_path(
+                        graph, start_node, goal_node,
+                        heuristic=heuristic, weight=make_edge_weight(start_node),
+                    )
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                    continue
+                length = sum(
+                    graph[path_nodes[k]][path_nodes[k + 1]]["weight"]
+                    for k in range(len(path_nodes) - 1)
                 )
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                continue
-            length = sum(
-                graph[path_nodes[k]][path_nodes[k + 1]]["weight"]
-                for k in range(len(path_nodes) - 1)
-            )
-            if length < best_length:
-                best_length = length
-                best_path_coords = [node_positions[n] for n in path_nodes] + [
-                    (exit_point.x, exit_point.y)
-                ]
+                if length < best_length:
+                    best_length = length
+                    best_path_coords = [node_positions[n] for n in path_nodes] + [
+                        (exit_point.x, exit_point.y)
+                    ]
+            path_cache[start_node] = best_path_coords
 
         if best_path_coords:
             suggestions.append({

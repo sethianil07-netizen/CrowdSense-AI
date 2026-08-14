@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { DoorOpen, LogOut, UtensilsCrossed } from "lucide-react";
 
 const MAX_RENDERED_AGENTS = 700; // render cap for browser performance
+const MAX_RENDERED_ROUTES = 40;  // cap distinct route lines drawn, even if backend sends more
 
 function severityColor(severity) {
   if (severity > 0.66) return "#FF5568";
@@ -27,6 +28,23 @@ export default function VenueMap({ venue, agents, bottlenecks, routes, rerouteAp
     const step = Math.ceil(agents.length / MAX_RENDERED_AGENTS);
     return agents.filter((_, i) => i % step === 0);
   }, [agents]);
+
+  // Densely packed agents heading to the same congested zone almost
+  // always get near-identical reroute paths from the backend. Rendering
+  // one animated <polyline> per agent (which could be hundreds, even
+  // capped server-side at 300) is unnecessary DOM/animation load for a
+  // visual that looks the same either way — so we dedupe by rounded
+  // path shape and cap the distinct lines actually drawn.
+  const dedupedRoutes = useMemo(() => {
+    if (!routes?.length) return [];
+    const seen = new Map();
+    for (const route of routes) {
+      const key = route.new_path.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join("|");
+      if (!seen.has(key)) seen.set(key, route);
+      if (seen.size >= MAX_RENDERED_ROUTES) break;
+    }
+    return Array.from(seen.values());
+  }, [routes]);
 
   const strokeW = Math.max(width, height) * 0.004;
 
@@ -99,7 +117,7 @@ export default function VenueMap({ venue, agents, bottlenecks, routes, rerouteAp
 
         {/* reroute path, if applied */}
         {rerouteApplied &&
-          routes?.map((route, i) => {
+          dedupedRoutes.map((route, i) => {
             const points = route.new_path.map(([x, y]) => `${x},${y}`).join(" ");
             return (
               <polyline
